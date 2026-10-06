@@ -38,6 +38,13 @@ nav button{flex:1;border:0;background:none;color:var(--sub);padding:9px 0 8px;fo
 nav button svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.8}
 nav button.on{color:var(--accent);font-weight:700}
 
+/* ログイン */
+.login{position:fixed;inset:0;z-index:20;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;padding:24px;text-align:center}
+.login[hidden]{display:none}
+.login h1{font-size:24px}
+.login p{font-size:14px;color:var(--sub);line-height:1.7;white-space:pre-line}
+.login .btn{min-width:240px}
+
 /* 入力画面 */
 .topline{display:flex;gap:8px;align-items:center}
 .seg{display:flex;background:var(--key2);border-radius:10px;padding:3px}
@@ -85,6 +92,7 @@ nav button.on{color:var(--accent);font-weight:700}
 .item .d b{display:block;font-size:18px;color:var(--ink)}
 .item .m{flex:1;min-width:0}
 .item .m .t{font-weight:700;font-size:15px}
+.item .m .t em{font-style:normal;font-weight:400;font-size:11px;color:var(--sub);margin-left:6px}
 .item .m .s{font-size:12px;color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .item .a{font-weight:700;font-variant-numeric:tabular-nums}
 .item .a.exp{color:var(--exp)} .item .a.inc{color:var(--inc)}
@@ -114,8 +122,9 @@ th,td{padding:6px 4px;border-bottom:1px solid var(--line);text-align:right}
 th:first-child,td:first-child{text-align:left}
 th{font-size:11px;color:var(--sub);font-weight:400}
 .neg{color:var(--exp)} .pos{color:var(--inc)}
-.tools{display:flex;gap:8px;justify-content:center;padding-bottom:6px}
+.tools{display:flex;gap:8px;justify-content:center;flex-wrap:wrap}
 .tools button{border:1px solid var(--line);background:var(--card);border-radius:10px;padding:8px 12px;font-size:13px}
+.account{text-align:center;font-size:12px;color:var(--sub);padding-bottom:6px}
 
 /* 画面の低い端末（iPhone SE など）でもスクロールせず収まるように */
 @media (max-height:700px){
@@ -133,11 +142,19 @@ th{font-size:11px;color:var(--sub);font-weight:400}
   nav button{padding:6px 0 5px}
 }
 .toast{position:fixed;left:50%;bottom:calc(80px + env(safe-area-inset-bottom));transform:translateX(-50%);background:var(--ink);color:var(--bg);
-  padding:10px 18px;border-radius:999px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:10}
+  padding:10px 18px;border-radius:999px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:30}
 .toast.show{opacity:.92}
 </style>
 </head>
 <body>
+<!-- ログイン画面 -->
+<div id="login" class="login">
+  <h1>かんたん家計簿</h1>
+  <p id="loginMsg">読み込み中…</p>
+  <button id="bLogin" class="btn primary" hidden>Googleでログイン</button>
+  <button id="bLogout2" class="link" hidden>別のアカウントでログインする</button>
+</div>
+
 <main>
   <!-- 入力画面 -->
   <section id="s-input" class="screen active">
@@ -176,6 +193,7 @@ th{font-size:11px;color:var(--sub);font-weight:400}
       <label>日<select id="fDay"></select></label>
       <label>ジャンル<select id="fCat"></select></label>
       <label>購入場所<select id="fPlace"></select></label>
+      <label>入力者<select id="fUser"></select></label>
     </div>
     <div class="fbar"><span id="hSum"></span><button class="link" id="fClear">条件をクリア</button></div>
     <div class="list" id="hList"></div>
@@ -199,8 +217,10 @@ th{font-size:11px;color:var(--sub);font-weight:400}
     <div class="tools">
       <button id="bExport">バックアップ保存</button>
       <button id="bImport">バックアップ復元</button>
+      <button id="bLogout">ログアウト</button>
       <input type="file" id="fileIn" accept="application/json,.json" hidden>
     </div>
+    <div class="account" id="account"></div>
   </section>
 </main>
 
@@ -211,10 +231,31 @@ th{font-size:11px;color:var(--sub);font-weight:400}
 </nav>
 <div class="toast" id="toast"></div>
 
-<script>
+<script type="module">
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.0.2/firebase-app.js';
+import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut }
+  from 'https://www.gstatic.com/firebasejs/11.0.2/firebase-auth.js';
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
+  collection, doc, onSnapshot, addDoc, deleteDoc, setDoc, writeBatch }
+  from 'https://www.gstatic.com/firebasejs/11.0.2/firebase-firestore.js';
+
+const firebaseConfig = {
+  apiKey: "AIzaSyC_w9rzw1964YXOhH_UHcMZ5f6SnHUnAR4",
+  authDomain: "kakeibo-1516c.firebaseapp.com",
+  projectId: "kakeibo-1516c",
+  storageBucket: "kakeibo-1516c.firebasestorage.app",
+  messagingSenderId: "188117720859",
+  appId: "1:188117720859:web:7418e3cb18e70b9c42bdbe"
+};
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+// 端末にもキャッシュするので、電波が悪いときも入力でき、つながったときに送信される
+const db = initializeFirestore(app, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) });
+const recCol = collection(db, 'records');
+const optDoc = doc(db, 'config', 'options');
+
 const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
-const KEY_REC = 'kakeibo.records.v1', KEY_OPT = 'kakeibo.options.v1';
 
 const DEFAULT_OPTS = {
   place: ['コンビニ', 'スーパー', 'ドラッグストア', '飲食店', 'ネット通販', 'その他'],
@@ -224,16 +265,9 @@ const DEFAULT_OPTS = {
 };
 const PALETTE = ['#2f6f5e','#c8553d','#2f7fb8','#d9a23b','#7a5ea8','#4f9d69','#c96f9b','#6b8f9e','#a3743f','#8c8c8c'];
 
-function load(key, def) {
-  try { const v = JSON.parse(localStorage.getItem(key)); return v == null ? def : v; } catch (e) { return def; }
-}
-function store(key, val) {
-  try { localStorage.setItem(key, JSON.stringify(val)); return true; }
-  catch (e) { toast('保存に失敗しました'); return false; }
-}
-
-let recs = load(KEY_REC, []);
-let opts = Object.assign({}, DEFAULT_OPTS, load(KEY_OPT, {}));
+let recs = [];
+let opts = { ...DEFAULT_OPTS };
+let user = null;
 
 const yen = n => '¥' + Math.round(n).toLocaleString('ja-JP');
 const pad = n => String(n).padStart(2, '0');
@@ -244,7 +278,73 @@ const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>'
 let toastTimer;
 function toast(msg) {
   const t = $('#toast'); t.textContent = msg; t.classList.add('show');
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 1600);
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 1800);
+}
+const fail = e => { console.error(e); toast(e.code === 'permission-denied' ? '権限がありません' : '保存に失敗しました'); };
+const saveOpts = () => setDoc(optDoc, opts).catch(fail);
+
+/* ---------- ログイン ---------- */
+const provider = new GoogleAuthProvider();
+provider.setCustomParameters({ prompt: 'select_account' });
+
+function showLogin(msg, { login = true, logout = false } = {}) {
+  $('#login').hidden = false;
+  $('#loginMsg').textContent = msg;
+  $('#bLogin').hidden = !login;
+  $('#bLogout2').hidden = !logout;
+}
+$('#bLogin').onclick = async () => {
+  try { await signInWithPopup(auth, provider); }
+  catch (e) {
+    if (['auth/popup-blocked', 'auth/operation-not-supported-in-this-environment', 'auth/cancelled-popup-request'].includes(e.code)) {
+      signInWithRedirect(auth, provider);
+    } else if (e.code !== 'auth/popup-closed-by-user') {
+      showLogin('ログインに失敗しました\n' + (e.code || e.message));
+    }
+  }
+};
+getRedirectResult(auth).catch(e => showLogin('ログインに失敗しました\n' + (e.code || e.message)));
+const logout = () => signOut(auth);
+$('#bLogout').onclick = () => { if (confirm('ログアウトしますか？')) logout(); };
+$('#bLogout2').onclick = logout;
+
+let unsubs = [];
+onAuthStateChanged(auth, u => {
+  unsubs.forEach(f => f()); unsubs = [];
+  recs = []; opts = { ...DEFAULT_OPTS };
+  user = u;
+  if (!u) return showLogin('Googleアカウントでログインしてください');
+  $('#login').hidden = true;
+  $('#account').textContent = `ログイン中：${u.displayName || ''}（${u.email}）`;
+
+  const denied = e => {
+    console.error(e);
+    if (e.code === 'permission-denied')
+      showLogin(`このアカウント（${u.email}）には\n利用する権限がありません`, { login: false, logout: true });
+  };
+  let first = true;
+  unsubs.push(onSnapshot(recCol, snap => {
+    recs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    refresh();
+    if (first) { first = false; offerMigration(); }
+  }, denied));
+  unsubs.push(onSnapshot(optDoc, snap => {
+    if (snap.exists()) opts = { ...DEFAULT_OPTS, ...snap.data() };
+    if (detailOpen()) renderChips();
+  }, denied));
+});
+
+// 以前この端末だけに保存していたデータをクラウドへ移す（1回だけ）
+async function offerMigration() {
+  let old = [];
+  try {
+    if (localStorage.getItem('kakeibo.migrated')) return;
+    old = JSON.parse(localStorage.getItem('kakeibo.records.v1')) || [];
+  } catch (e) { return; }
+  if (!old.length) return;
+  if (!confirm(`この端末に以前のデータが${old.length}件あります。\n共有の家計簿に移しますか？`)) return;
+  const n = await importRecs(old);
+  if (n >= 0) { try { localStorage.setItem('kakeibo.migrated', '1'); } catch (e) {} toast(`${n}件を移しました`); }
 }
 
 /* ---------- 画面切替 ---------- */
@@ -252,8 +352,11 @@ $$('nav button').forEach(b => b.onclick = () => show(b.dataset.s));
 function show(s) {
   $$('nav button').forEach(b => b.classList.toggle('on', b.dataset.s === s));
   $$('.screen').forEach(el => el.classList.toggle('active', el.id === 's-' + s));
-  if (s === 'hist') renderHist();
-  if (s === 'sum') renderSum();
+  refresh();
+}
+function refresh() {
+  if ($('#s-hist').classList.contains('active')) renderHist();
+  if ($('#s-sum').classList.contains('active')) renderSum();
 }
 
 /* ---------- 入力画面 ---------- */
@@ -312,8 +415,8 @@ $('#detail').addEventListener('pointerdown', e => {
   pressTimer = setTimeout(() => {
     longPressed = true;
     const k = optKey(c.parentNode.dataset.k), o = c.dataset.o;
-    if (confirm(`選択肢「${o}」を削除しますか？\n（登録済みのデータは消えません）`)) {
-      opts[k] = opts[k].filter(x => x !== o); store(KEY_OPT, opts);
+    if (confirm(`選択肢「${o}」を削除しますか？\n（全員の画面から消えます。登録済みのデータは消えません）`)) {
+      opts = { ...opts, [k]: opts[k].filter(x => x !== o) }; saveOpts();
       if (sel[c.parentNode.dataset.k] === o) sel[c.parentNode.dataset.k] = '';
       renderChips();
     }
@@ -331,7 +434,7 @@ $('#detail').addEventListener('click', e => {
     const name = (prompt('追加する選択肢の名前') || '').trim();
     if (!name) return;
     const ok = optKey(k);
-    if (!opts[ok].includes(name)) { opts[ok] = [...opts[ok], name]; store(KEY_OPT, opts); }
+    if (!opts[ok].includes(name)) { opts = { ...opts, [ok]: [...opts[ok], name] }; saveOpts(); }
     sel[k] = name; renderChips(); return;
   }
   sel[k] = sel[k] === c.dataset.o ? '' : c.dataset.o;
@@ -339,14 +442,15 @@ $('#detail').addEventListener('click', e => {
 });
 
 $('#save').onclick = () => {
+  if (!user) return;
   const rec = {
-    id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
     type, amount: +amt, date: $('#date').value || today(),
     place: type === 'exp' ? sel.place : '', pay: type === 'exp' ? sel.pay : '',
-    cat: sel.cat || '未分類', memo: $('#memo').value.trim(), ts: Date.now()
+    cat: sel.cat || '未分類', memo: $('#memo').value.trim(), ts: Date.now(),
+    by: user.displayName || user.email, byEmail: user.email
   };
-  recs.push(rec);
-  if (!store(KEY_REC, recs)) { recs.pop(); return; }
+  // オフラインでもすぐ画面に反映されるので完了を待たない
+  addDoc(recCol, rec).catch(fail);
   toast(`${yen(rec.amount)} を登録しました`);
   amt = ''; sel = { place: '', pay: '', cat: '' }; $('#memo').value = '';
   closeDetail();
@@ -361,18 +465,21 @@ function fillSelect(el, items, allLabel, labelFn) {
 }
 fillSelect($('#fDay'), Array.from({ length: 31 }, (_, i) => String(i + 1)), 'すべて', v => v + '日');
 $('#fMonth').value = today().slice(0, 7);
-['#fMonth', '#fDay', '#fCat', '#fPlace'].forEach(s => $(s).addEventListener('change', renderHist));
-$('#fClear').onclick = () => { ['#fMonth', '#fDay', '#fCat', '#fPlace'].forEach(s => $(s).value = ''); renderHist(); };
+const FILTERS = ['#fMonth', '#fDay', '#fCat', '#fPlace', '#fUser'];
+FILTERS.forEach(s => $(s).addEventListener('change', renderHist));
+$('#fClear').onclick = () => { FILTERS.forEach(s => $(s).value = ''); renderHist(); };
 
 function renderHist() {
   fillSelect($('#fCat'), uniq([...opts.exp, ...opts.inc, ...recs.map(r => r.cat)]), 'すべて');
   fillSelect($('#fPlace'), uniq([...opts.place, ...recs.map(r => r.place)]), 'すべて');
-  const m = $('#fMonth').value, d = $('#fDay').value, c = $('#fCat').value, p = $('#fPlace').value;
+  fillSelect($('#fUser'), uniq(recs.map(r => r.by)), 'すべて');
+  const m = $('#fMonth').value, d = $('#fDay').value, c = $('#fCat').value, p = $('#fPlace').value, u = $('#fUser').value;
   const list = recs.filter(r =>
     (!m || r.date.startsWith(m)) &&
     (!d || +r.date.slice(8, 10) === +d) &&
     (!c || r.cat === c) &&
-    (!p || r.place === p)
+    (!p || r.place === p) &&
+    (!u || r.by === u)
   ).sort((a, b) => b.date.localeCompare(a.date) || b.ts - a.ts);
 
   const ex = list.filter(r => r.type === 'exp').reduce((s, r) => s + r.amount, 0);
@@ -380,11 +487,11 @@ function renderHist() {
   $('#hSum').textContent = `${list.length}件　支出 ${yen(ex)}　収入 ${yen(inc)}`;
 
   $('#hList').innerHTML = list.length ? list.map(r => {
-    const [y, mo, da] = r.date.split('-');
+    const [, mo, da] = r.date.split('-');
     const sub = [r.place, r.pay, r.memo].filter(Boolean).join(' / ') || '—';
-    return `<button class="item" data-id="${r.id}">
+    return `<button class="item" data-id="${esc(r.id)}">
       <div class="d">${+mo}月<b>${+da}</b></div>
-      <div class="m"><div class="t">${esc(r.cat)}</div><div class="s">${esc(sub)}</div></div>
+      <div class="m"><div class="t">${esc(r.cat)}${r.by ? `<em>${esc(r.by)}</em>` : ''}</div><div class="s">${esc(sub)}</div></div>
       <div class="a ${r.type}">${r.type === 'exp' ? '-' : '+'}${yen(r.amount)}</div></button>`;
   }).join('') : '<div class="empty">該当する記録はありません</div>';
 }
@@ -392,7 +499,7 @@ $('#hList').addEventListener('click', e => {
   const it = e.target.closest('.item'); if (!it) return;
   const r = recs.find(x => x.id === it.dataset.id); if (!r) return;
   if (confirm(`${r.date}　${r.cat}　${yen(r.amount)}\nこの記録を削除しますか？`)) {
-    recs = recs.filter(x => x.id !== r.id); store(KEY_REC, recs); renderHist(); toast('削除しました');
+    deleteDoc(doc(recCol, r.id)).catch(fail); toast('削除しました');
   }
 });
 
@@ -475,18 +582,29 @@ $('#bExport').onclick = () => {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 };
 $('#bImport').onclick = () => $('#fileIn').click();
+
+// 同じIDの記録は上書きになるので、同じファイルを2回読み込んでも重複しない
+async function importRecs(list) {
+  const ok = list.filter(r => r && r.id && r.date && r.amount);
+  try {
+    for (let i = 0; i < ok.length; i += 400) {
+      const batch = writeBatch(db);
+      ok.slice(i, i + 400).forEach(({ id, ...data }) => batch.set(doc(recCol, String(id)), data));
+      await batch.commit();
+    }
+    return ok.length;
+  } catch (e) { fail(e); return -1; }
+}
 $('#fileIn').onchange = async e => {
   const f = e.target.files[0]; if (!f) return;
-  try {
-    const data = JSON.parse(await f.text());
-    if (!Array.isArray(data.recs)) throw 0;
-    const ids = new Set(recs.map(r => r.id));
-    const add = data.recs.filter(r => r && r.id && !ids.has(r.id));
-    recs = recs.concat(add); store(KEY_REC, recs);
-    if (data.opts) { opts = Object.assign({}, DEFAULT_OPTS, data.opts); store(KEY_OPT, opts); }
-    toast(`${add.length}件を復元しました`); renderSum();
-  } catch (err) { toast('ファイルを読み込めませんでした'); }
   e.target.value = '';
+  let data;
+  try { data = JSON.parse(await f.text()); if (!Array.isArray(data.recs)) throw 0; }
+  catch (err) { return toast('ファイルを読み込めませんでした'); }
+  const n = await importRecs(data.recs);
+  if (n < 0) return;
+  if (data.opts) { opts = { ...DEFAULT_OPTS, ...data.opts }; saveOpts(); }
+  toast(`${n}件を復元しました`);
 };
 
 renderAmt();
